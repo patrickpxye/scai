@@ -21,6 +21,10 @@ from scai.memory.buffer import ConversationBuffer
 
 import re
 
+import pandas as pd
+
+import os
+
 class Context():
     def __init__(
         self, 
@@ -50,6 +54,8 @@ class Context():
         has_manners: bool,
         ask_question: bool,
         ask_question_train: bool,
+        bph_norm: str,
+        bph_bp: str
     ) -> None:
         """
         Initializes a context (i.e. context for the MDP / Meta-Prompt run).
@@ -108,6 +114,10 @@ class Context():
         self.assistant_llm = assistant_llm
         self.meta_llm = meta_llm
         self.oracle_llm = oracle_llm
+        # best policy handbook
+        self.bph_norm = bph_norm
+        self.bph_bp = bph_norm
+
 
 
     @staticmethod
@@ -135,7 +145,9 @@ class Context():
         propose_decide_alignment: bool,
         has_manners: bool,
         ask_question: bool,
-        ask_question_train: bool
+        ask_question_train: bool,
+        bph_norm: str,
+        bph_bp: str
     ) -> "Context":
         """
         Creates a context (i.e. context for the MDP / Meta-Prompt run).
@@ -172,6 +184,8 @@ class Context():
             has_manners=has_manners,
             ask_question=ask_question,
             ask_question_train=ask_question_train,
+            bph_norm = bph_norm,
+            bph_bp = bph_bp,
         )
     # This function instantiates all of either the fixed-agent or flexible-agent prompts, to be paired off later
     def generate_agent_prompts(self,
@@ -278,6 +292,8 @@ class Context():
         proposals: list,
     ) -> None:
         
+        total_gain = 0
+        
         #if the dictator string contains a substring that starts with "I choose option 2." or "I choose option 1.", then remove that substring
         if dictator_str['response'].find("I choose option 2.") != -1:
             dictator_str['response'] = dictator_str['response'].replace("I choose option 2.", "")
@@ -312,9 +328,15 @@ class Context():
         # If the proposal is accepted, add the scores, as the values they are
         if accept:
             dictator_scores[index], decider_scores[index] = dict_scores, deci_scores
+            for value in dict_scores.values():
+                total_gain += value
+            for value in deci_scores.values():
+                total_gain += value
         # Otherwise, indicate that both parties recieved nothing with 0's
         else:
             dictator_scores[index], decider_scores[index] = 0, 0
+        
+        return total_gain
 
 
     # This function takes in a list of paired prompts and pairs them with the corresponding models
@@ -367,6 +389,8 @@ class Context():
 
         # Gets the amount of currency that will be split 
         amount = self.amounts_per_run[run]
+        #keep a counter of total gain
+        total_gain = 0.0
 
         # Keeps track of the proposals the fixed-policy agent made, the income it recieved as a dictator, and the income it received as a decider
         user_proposals, user_scores_dictator, user_scores_decider = [], [-1] * len(pairs), [-1] * len(pairs)
@@ -479,7 +503,7 @@ class Context():
             else:
                 dictator, decider, proposals = assistant_scores_dictator, assistant_scores_decider, assistant_proposals
             # Get the dictator income, decider income, and proposals after setting the correct type for the dictator and decider
-            self.get_amounts(i, dictator_response, decider_response, dictator, decider, proposals)
+            total_gain += self.get_amounts(i, dictator_response, decider_response, dictator, decider, proposals)/amount
         # run meta-prompt at end of conversation
         meta_response = self.meta_model.run(
                                             buffer=self.buffer,
@@ -488,7 +512,46 @@ class Context():
                                             n_fixed=self.n_fixed_inter,
                                             n_mixed=self.n_mixed_inter,
                                             verbose=self.verbose,
-                                            )                 
+                                            gain=total_gain,
+                                            )
+
+        ########################## Read Best Policy Handbook ##########################
+
+        file_path = os.path.join(os.path.dirname(__file__), 'best_policy_handbook.csv')
+        df = pd.read_csv(file_path)
+
+        df['gain'] = pd.to_numeric(df['gain'], errors='coerce')
+
+        if self.bph_norm != "" and self.bph_bp != "":
+            # get the row that corresponds to the norm and best policy, and update the gain column
+            df.loc[(df['norm'] == self.bph_norm) & (df['policy'] == self.bph_bp), 'gain'] *= 0.9
+            df.loc[(df['norm'] == self.bph_norm) & (df['policy'] == self.bph_bp), 'gain'] += total_gain * 0.1
+
+        df.to_csv(file_path, index=False)
+
+        response_string = meta_response["response"]
+        
+        norm = response_string.split()[-1].lower()
+        norm = ''.join(filter(str.isalpha, norm))
+
+        matching_norm_df = df[df['norm'] == norm]
+        
+        # get the rows that corresponds to the norm, and choose the policy column that maximizes the gain column
+        if not matching_norm_df.empty:
+            # Find the index of the row with the maximum 'gain' within the filtered DataFrame
+            idx_of_max_gain = matching_norm_df['gain'].idxmax()
+            
+            # Access the 'policy' value of the row with the maximum 'gain'
+            best_policy = matching_norm_df.loc[idx_of_max_gain, 'policy']
+        else:
+            # Handle the case where no matching 'norm' is found or the DataFrame is empty
+            best_policy = "fair"  # Replace with a suitable default value
+
+        meta_response['response'] = f"Principle to adhere to: Be {best_policy} when proposing, and accept all splits."
+
+        ########################## Close Best Policy Handbook ##########################
+
         # save meta-prompt response for start of next conversation
         self.buffer.save_system_context(model_id="system", **meta_response)
-        return user_scores_dictator, user_scores_decider, assistant_scores_dictator, assistant_scores_decider, user_proposals, assistant_proposals, num_questions_asked / num_total_flex_dictators
+
+        return user_scores_dictator, user_scores_decider, assistant_scores_dictator, assistant_scores_decider, user_proposals, assistant_proposals, num_questions_asked / num_total_flex_dictators, norm, best_policy

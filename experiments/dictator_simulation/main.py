@@ -66,6 +66,8 @@ def create_context(
         has_manners = (args.env.single_fixed_manners == "neutral"),
         ask_question=args.env.edge_cases.conditions.ask_question,
         ask_question_train=args.env.ask_question_train,
+        bph_norm = args.sim.norm,
+        bph_bp = args.sim.best_policy,
     )
 
 # create llms to be used in context
@@ -150,8 +152,10 @@ def run(args):
             system_messages.append(system_message)
 
             # run context - this runs the simulation
-            user_scores_dictator, user_scores_decider, assistant_scores_dictator, assistant_scores_decider, user_proposals, assistant_proposals, question = context.run(run)
+            user_scores_dictator, user_scores_decider, assistant_scores_dictator, assistant_scores_decider, user_proposals, assistant_proposals, question, norm, best_policy = context.run(run)
             scores.append((user_scores_dictator, user_scores_decider, assistant_scores_dictator, assistant_scores_decider, user_proposals, assistant_proposals))
+            args.sim.norm = norm
+            args.sim.best_policy = best_policy
 
             # save results as csv
             save_as_csv(system_data=context.buffer._system_memory.messages,

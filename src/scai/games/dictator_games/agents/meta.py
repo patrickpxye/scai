@@ -119,6 +119,7 @@ class MetaPromptModel(BaseAgent):
         n_fixed: int,
         n_mixed: int,
         verbose: bool = False,
+        gain: float = 0.0,
     ) -> str:
         """Runs meta-prompt
 
@@ -143,10 +144,10 @@ class MetaPromptModel(BaseAgent):
         # get meta-prompt template and string
         system_prompt, meta_prompt = self._get_prompt(meta_prompt)
         meta_prompt = meta_prompt.format(social_contract=social_contract_string,
-                                                    fixed_string=chat_history_strings[0],
-                                                    mixed_string=chat_history_strings[1],
-                                                    flex_string=chat_history_strings[2]
-                                                    )
+                                         fixed_string=chat_history_strings[0],
+                                         mixed_string=chat_history_strings[1],
+                                         flex_string=chat_history_strings[2],
+                                         current_gain=str(gain*100))
         response = self._get_response(system_prompt, meta_prompt)
         
         if verbose:

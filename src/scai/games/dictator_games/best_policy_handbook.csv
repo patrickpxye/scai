@@ -1,0 +1,10 @@
+norm,policy,gain
+selfish,selfish,0.5
+selfish,altruistic,1.0
+selfish,fair,0.7
+altruistic,selfish,0.5
+altruistic,altruistic,1.0
+altruistic,fair,0.7
+fair,selfish,0.5
+fair,altruistic,1.0
+fair,fair,0.7
